@@ -212,13 +212,6 @@ class App:
         self.root = root
         root.title("AIMemPowerCost")
         root.configure(bg=BG)
-        root.geometry("760x560")
-        root.minsize(700, 520)
-        try:
-            import ctypes
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)
-        except Exception:
-            pass
 
         self.store = EnergyStore(STATE_FILE)
         self.gpu_count = 0
@@ -233,15 +226,24 @@ class App:
         self.result_queue: "queue.Queue" = queue.Queue()
         self.stop_event = threading.Event()
         self.collector: GpuCollector | None = None
-        self._gpu_var = tk.StringVar()
+        self._gpu_var = tk.StringVar(value=self.gpu_names[0] if self.gpu_names else "")
 
         self._build_ui()
+        self._fit_window()
         if HAS_NVML and self.gpu_count:
             self._start_collector(0)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(300, self._tick)
 
     # -- UI ---------------------------------------------------------------
+
+    def _fit_window(self):
+        """Size the window to its content (DPI-awareness is set in main())."""
+        self.root.update_idletasks()
+        w = self.root.winfo_reqwidth() + 16
+        h = self.root.winfo_reqheight() + 32
+        self.root.geometry(f"{w}x{h}")
+        self.root.minsize(max(560, int(w * 0.72)), max(400, int(h * 0.72)))
 
     def _build_ui(self):
         r = self.root
@@ -268,14 +270,15 @@ class App:
             tk.Label(head, text="NVML недоступен", font=("Segoe UI", 10),
                      bg=BG, fg=RED).pack(side="right")
 
-        # live card
+        # live card (grid: 4 stat rows x 2 columns)
         live = tk.Frame(r, bg=CARD, highlightbackground=CARD, highlightthickness=1)
         live.pack(fill="x", **pad)
-
-        self.l_util = self._stat_row(live, "Нагрузка GPU")
-        self.l_mem = self._stat_row(live, "Видеопамять")
-        self.l_power = self._stat_row(live, "Мощность")
-        self.l_temp = self._stat_row(live, "Температура")
+        for c in (0, 1):
+            live.columnconfigure(c, weight=1, uniform="stat")
+        self.l_util = self._stat_row(live, "Нагрузка GPU", 0, 0)
+        self.l_mem = self._stat_row(live, "Видеопамять", 0, 1)
+        self.l_power = self._stat_row(live, "Мощность", 1, 0)
+        self.l_temp = self._stat_row(live, "Температура", 1, 1)
 
         # chart
         chart_frame = tk.Frame(r, bg=CARD, highlightbackground=CARD, highlightthickness=1)
@@ -288,9 +291,11 @@ class App:
         # money cards
         money = tk.Frame(r, bg=BG)
         money.pack(fill="x", **pad)
-        self.card_day = self._money_card(money, "Сегодня")
-        self.card_hour = self._money_card(money, "За час")
-        self.card_month = self._money_card(money, "За месяц")
+        for c in range(3):
+            money.columnconfigure(c, weight=1, uniform="money")
+        self.card_day = self._money_card(money, "Сегодня", 0)
+        self.card_hour = self._money_card(money, "За час", 1)
+        self.card_month = self._money_card(money, "За месяц", 2)
 
         # settings
         st = tk.Frame(r, bg=BG)
@@ -322,24 +327,22 @@ class App:
             tk.Label(r, text="GPU NVIDIA не обнаружен.", font=("Segoe UI", 10),
                      bg=BG, fg=RED).pack(pady=10)
 
-    def _stat_row(self, parent, title) -> dict:
-        row = tk.Frame(parent, bg=CARD)
-        row.pack(fill="x", padx=12, pady=4)
-        tk.Label(row, text=title, font=("Segoe UI", 10), bg=CARD, fg=MUTED
+    def _stat_row(self, parent, title, row, col) -> dict:
+        r = tk.Frame(parent, bg=CARD)
+        r.grid(row=row, column=col, sticky="nsew", padx=10, pady=4)
+        tk.Label(r, text=title, font=("Segoe UI", 10), bg=CARD, fg=MUTED
                  ).grid(row=0, column=0, sticky="w")
-        val = tk.Label(row, text="—", font=("Segoe UI", 12, "bold"),
+        val = tk.Label(r, text="—", font=("Segoe UI", 12, "bold"),
                        bg=CARD, fg=FG)
         val.grid(row=1, column=0, sticky="w", pady=(0, 4))
-        bar = tk.Canvas(row, width=420, height=10, bg="#2a3140", highlightthickness=0)
-        bar.grid(row=0, column=1, rowspan=2, sticky="e", padx=12, pady=(2, 4))
+        bar = tk.Canvas(r, width=200, height=10, bg="#2a3140", highlightthickness=0)
+        bar.grid(row=0, column=1, rowspan=2, sticky="e", padx=10, pady=(2, 4))
         bar.create_rectangle(0, 0, 0, 10, fill=ACCENT, outline="")
         return {"value": val, "bar": bar, "pct": 0.0}
 
-    def _money_card(self, parent, title) -> dict:
+    def _money_card(self, parent, title, col) -> dict:
         f = tk.Frame(parent, bg=CARD_HI, highlightbackground=CARD, highlightthickness=1)
-        f.pack(side="left", expand=True, fill="both", padx=(0 if parent.winfo_children() else 0, 8))
-        if f is parent.winfo_children()[-1] and len(parent.winfo_children()) == 1:
-            f.pack(padx=0)
+        f.grid(row=0, column=col, sticky="nsew", padx=4, pady=4)
         tk.Label(f, text=title, font=("Segoe UI", 10), bg=CARD_HI, fg=MUTED
                  ).pack(anchor="w", padx=14, pady=(10, 0))
         cost = tk.Label(f, text="0.00 ₽", font=("Segoe UI", 18, "bold"),
@@ -360,9 +363,20 @@ class App:
         self.collector = GpuCollector(self.store, gpu_index, self.stop_event, self.result_queue)
         self.collector.start()
 
+    def _gpu_index(self) -> int | None:
+        """Safe GPU index from the OptionMenu value (None if not in list)."""
+        if not self.gpu_count:
+            return None
+        try:
+            return self.gpu_names.index(self._gpu_var.get())
+        except ValueError:
+            return None
+
     def _on_gpu_change(self, *_):
         if HAS_NVML and self.gpu_count:
-            self._start_collector(self.gpu_names.index(self._gpu_var.get()))
+            idx = self._gpu_index()
+            if idx is not None:
+                self._start_collector(idx)
 
     def _tick(self):
         try:
@@ -401,13 +415,14 @@ class App:
             card["cost"].config(text=f"{self.store.cost(wh):.2f} ₽")
             card["wh"].config(text=f"{wh / 1000.0:.3f} кВт·ч")
 
-        self.status.config(text=f"обновлено {d['ts']}  ·  GPU {self.gpu_names.index(self._gpu_var.get()) if self.gpu_count else '—'}",
+        gi = self._gpu_index()
+        self.status.config(text=f"обновлено {d['ts']}  ·  GPU {gi if gi is not None else '—'}",
                            fg=MUTED)
 
     def _set_bar(self, row, frac, color=ACCENT):
         frac = max(0.0, min(1.0, frac))
         row["bar"].delete("all")
-        row["bar"].create_rectangle(0, 0, int(420 * frac), 10, fill=color, outline="")
+        row["bar"].create_rectangle(0, 0, int(200 * frac), 10, fill=color, outline="")
         row["pct"] = frac
 
     def _draw_chart(self):
@@ -495,6 +510,13 @@ def main():
         except OSError:
             pass
         sys.exit(0 if ok else 1)
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            pass
 
     root = tk.Tk()
     App(root)
