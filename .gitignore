@@ -1,0 +1,17 @@
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Local state / IDE
+.vscode/
+.idea/
+*.log
+.DS_Store
